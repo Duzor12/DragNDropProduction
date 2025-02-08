@@ -1,0 +1,38 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'DM Sans', sans-serif;
+  }
+  
+  main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 1rem;
+      width: 100%;
+      max-width: 1024px;
+      margin: 0 auto;
+      box-sizing: border-box;
+  
+  }
+  
+  :root {
+      --light-text: #FADCBA;
+      --dark-text: black;
+  }
+  
+  body {
+    background-color: #141313;
+  }
+  
+  /* Hide scrollbars while maintaining scroll functionality */
+  * {
+    -ms-overflow-style: none; /* IE and Edge */
+    scrollbar-width: none; /* Firefox */
+  }
+  
+  *::-webkit-scrollbar {
+    display: none; /* Chrome, Safari and Opera */
+  }
+  /*********************************************************/
