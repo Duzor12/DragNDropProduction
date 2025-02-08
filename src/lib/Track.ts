@@ -4,23 +4,34 @@ import type { AudioClip } from './AudioClip';
 export class Track {
     id: number;
     name: string;
-    channel: Tone.Channel;  // Tone.js channel for volume/mute/pan
-    audioClips: AudioClip[];
+    volume: number;
+    muted: boolean;
+    clips: AudioClip[];
+    channel: Tone.Channel;
 
     constructor(id: number, name: string) {
       this.id = id;
       this.name = name;
-      this.channel = new Tone.Channel().toDestination();
-      this.audioClips = [];
+      this.volume = 1;
+      this.muted = false;
+      this.clips = [];
+      
+      // Create a Tone.js channel for this track
+      this.channel = new Tone.Channel({
+        volume: 0,
+        mute: false
+      }).toDestination();
     }
   
 
     setVolume(value: number) {
-      this.channel.volume.value = Tone.gainToDb(value); // Convert gain to decibels
+      this.volume = value;
+      this.channel.volume.value = Tone.gainToDb(value);
     }
   
     toggleMute() {
-      this.channel.mute = !this.channel.mute;
+      this.muted = !this.muted;
+      this.channel.mute = this.muted;
     }
   
     // Clean up when removing track
@@ -29,16 +40,16 @@ export class Track {
     }
 
     addAudioClip(audioClip: AudioClip) {
-      this.audioClips.push(audioClip);
+      this.clips.push(audioClip);
       audioClip.setCurrentTrack(this);
     }
 
     removeAudioClip(audioClip: AudioClip) { 
-      this.audioClips = this.audioClips.filter(clip => clip !== audioClip);
+      this.clips = this.clips.filter(clip => clip !== audioClip);
       audioClip.setCurrentTrack(null as unknown as Track);  
     }
 
     getAudioClips(): AudioClip[] {
-      return this.audioClips;
+      return this.clips;
     }
   }

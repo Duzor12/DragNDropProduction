@@ -1,66 +1,73 @@
 <script lang="ts">
-  import { createSwapy, type Swapy } from 'swapy';
   import { onMount, onDestroy } from 'svelte';
   import { Track } from '$lib/Track';
   import { AudioClip } from '$lib/AudioClip';
+  import { draggable } from '@neodrag/svelte';
+  import type { DragOptions } from '@neodrag/svelte';
+  import * as Tone from 'tone';
 
   let tracks: Track[] = $state([]);
-  let isPlaying = false;
+  let isPlaying = $state(false);
+  let currentTime = $state(0);
+  let playhead = $state(0);
+  
+  const pixelsPerSecond = 100;
+  
+  let transport: ReturnType<typeof Tone.getTransport>;
 
-
-
-  let container: HTMLElement
-  let swapy: Swapy | null = null
+  let audioItemPosition = $state({ x: 0, y: 0 });
+  
+  function isOverTracksContainer(element: HTMLElement) {
+    // Get all track timeline elements
+    const trackTimelines = document.querySelectorAll('.track-timeline');
+    if (!trackTimelines.length) return false;
+    
+    // Get the current bounding rectangle of the dragged element
+    const elementRect = element.getBoundingClientRect();
+    console.log('Dragged element rect:', elementRect);
+    
+    // Check each timeline for intersection
+    for (const timeline of trackTimelines) {
+      const timelineRect = timeline.getBoundingClientRect();
+      console.log('Timeline rect:', timelineRect);
+      if (
+        elementRect.right >= timelineRect.left &&
+        elementRect.left <= timelineRect.right &&
+        elementRect.bottom >= timelineRect.top &&
+        elementRect.top <= timelineRect.bottom
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   onMount(() => {
-    if (container) {
-      swapy = createSwapy(container, {
-        animation: 'dynamic',
-        // autoScrollOnDrag: true,
-        // swapMode: 'drop',
-        enabled: true,
-        // dragAxis: 'x',
-        //dragOnHold: true
+    transport = Tone.getTransport();
+    transport.bpm.value = 120;
+    
+    transport.scheduleRepeat((time) => {
+      currentTime = transport.seconds;
+      playhead = currentTime * pixelsPerSecond;
+    }, 0.1);
+  })
 
-      })
-
-      // swapy.enable(false)
-      // swapy.destroy()
-      // console.log(swapy.slotItemMap())
-
-      swapy.onBeforeSwap((event) => {
-        console.log('beforeSwap', event)
-        // This is for dynamically enabling and disabling swapping.
-        // Return true to allow swapping, and return false to prevent swapping.
-        return true
-      })
-
-      swapy.onSwapStart((event) => {
-        console.log('start', event)
-      })
-
-      swapy.onSwap((event) => {
-        console.log('swap', event)
-      })
-
-      swapy.onSwapEnd((event) => {
-        console.log('end', event)
-      })
+  async function togglePlayback() {
+    await Tone.start();
+    
+    if (!isPlaying) {
+      transport.start();
+      isPlaying = true;
+    } else {
+      transport.pause();
+      isPlaying = false;
     }
-  })
-
-  onDestroy(() => {
-    swapy?.destroy()
-  })
-
-
+  }
 
   function addTrack() {
     const track = new Track(tracks.length, `Track ${tracks.length + 1}`);
     tracks.push(track);
   }
-
-    
 </script>
 
 <main class="app">
@@ -70,21 +77,16 @@
     </div>
     
     <div class="transport-controls">
-      <button class="transport-btn">
-        <img src="/playIcon.png" alt="Play" />
+      <button class="transport-btn" onclick={togglePlayback}>
+        <img src={isPlaying ? "/pauseIcon.svg" : "/playIcon.png"} alt={isPlaying ? "Pause" : "Play"} />
       </button>
       <button class="transport-btn">
         <img src="/recordIcon.png" alt="Record" />
-
-
-
       </button>
       <button class="transport-btn">
         <img src="/cutIcon.png" alt="Cut" />
       </button>
     </div>
-
-
 
     <div class="master-controls">
       <div class="volume-control">
@@ -103,8 +105,8 @@
     <div class="left-controls">
       <div class="control-buttons">
         <button class="add-btn">
-          <img src="/PlusIcon.svg" alt="Add" />
-          <span>Audio Files</span>
+          <img src="/aiLogo.svg" alt="Add" />
+          <span>Generate Beat</span>
         </button>
         <button class="add-track-btn" onclick={addTrack}>
           <img src="/PlusIcon.svg" alt="Add Track" />
@@ -114,15 +116,41 @@
     </div>
     
     <div class="timeline-ruler">
-      <!-- Add ruler markings here -->
+      <div class="ruler-markings">
+        {#each Array(100) as _, i}
+          <div class="ruler-mark" style="left: {i * pixelsPerSecond}px">
+            <span class="ruler-time">{i}s</span>
+          </div>
+        {/each}
+      </div>
+      <div class="playhead" style="left: {playhead}px"></div>
     </div>
   </div>
 
-  <div class="main-content" bind:this={container}>
+  <div class="main-content">
     <div class="sidebar">
       <div class="sidebar-section">
-        <div class="audio-list" data-swapy-slot="1">
-          <div class="audio-item" data-swapy-item="1">
+        <div class="audio-list">
+          <div class="audio-item" use:draggable={{
+            bounds: ".main-content",
+            gpuAcceleration: true,
+            position: audioItemPosition,
+            onDragEnd: ({ offsetX, offsetY, rootNode }) => {
+                const isOver = isOverTracksContainer(rootNode);
+                //console.log('Drop position:', { offsetX, offsetY });
+                // console.log('Element rect:', rootNode.getBoundingClientRect());
+                //console.log('Is over tracks:', isOver);
+                
+                if (!isOver) {
+                    audioItemPosition = { x: 0, y: 0 };
+                } else {
+                    audioItemPosition = { x: offsetX, y: offsetY };
+                }
+            },
+            onDrag: ({ offsetX, offsetY }) => {
+                audioItemPosition = { x: offsetX, y: offsetY };
+            }
+          }}>
             <span class="audio-name">Audio 1</span>
             <span class="audio-duration">2:30</span>
           </div>
@@ -139,8 +167,10 @@
                 <h4>{track.name}</h4>
               </div>
             </div>
-            <div class="track-timeline" data-swapy-slot="2">
-              <!-- Timeline content -->
+            <div class="track-timeline">
+              <div class="track-content">
+                <!-- Timeline content -->
+              </div>
             </div>
           </div>
         {/each}
@@ -150,7 +180,6 @@
 </main>
 
 <style>
-  /* Add these global reset styles at the top of your style block */
   :global(*) {
     margin: 0;
     padding: 0;
@@ -193,7 +222,7 @@
   }
 
   .logo img {
-    height: 2.75rem;
+    height: 3.5rem;
     width: auto;
     transition: opacity 0.2s ease;
   }
@@ -242,10 +271,45 @@
   }
 
   .timeline-ruler {
-    height: 2rem;
+    position: relative;
+    height: 100%;
     background-color: #111111;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+  }
+
+  .ruler-markings {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 100%;
+  }
+
+  .ruler-mark {
+    position: absolute;
+    top: 50%;
+    width: 1px;
+    height: 10px;
+    background-color: rgba(255, 255, 255, 0.2);
+    transform: translateY(-50%);
+  }
+
+  .ruler-time {
+    position: absolute;
+    top: -20px;
+    left: 2px;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  .playhead {
+    position: absolute;
+    top: 0;
+    width: 2px;
+    height: 100%;
+    background-color: #ff0000;
+    z-index: 1000;
+    pointer-events: none;
   }
 
   .main-content {
@@ -259,11 +323,13 @@
     border-right: 1px solid rgba(255, 255, 255, 0.05);
     display: grid;
     grid-template-rows: auto 1fr;
+    overflow: visible;
   }
 
   .sidebar-section {
     display: grid;
     grid-template-rows: auto 1fr;
+    overflow: visible;
   }
 
   .section-header {
@@ -278,7 +344,7 @@
 
   .audio-list {
     padding: 0.5rem;
-    overflow-y: auto;
+    overflow: visible;
   }
 
   .audio-item {
@@ -293,6 +359,8 @@
     cursor: pointer;
     transition: all 0.2s ease;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    position: relative;
   }
 
   .audio-item:hover {
@@ -307,13 +375,6 @@
     overflow: hidden;
   }
 
-  .tracks-header {
-    padding: 1.25rem;
-    background-color: #111111;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
-  }
-
   .tracks-content {
     overflow-y: auto;
     background-color: #0a0a0a;
@@ -322,12 +383,12 @@
   .track {
     display: grid;
     grid-template-columns: 240px 1fr;
-    min-height: 120px;
+    height: 100px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   }
 
   .track-controls {
-    background-color: #111111;
+    background-color: #2d2a2a;
     border-right: 1px solid #202020;
     padding: 1.25rem;
     display: grid;
@@ -342,101 +403,6 @@
     align-items: center;
   }
 
-  .track-buttons {
-    display: grid;
-    grid-template-columns: repeat(2, auto);
-    gap: 0.25rem;
-  }
-
-  .track-btn {
-    background-color: #1a1a1a;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 4px;
-    padding: 0.5rem 0.9rem;
-    color: #ffffff;
-    cursor: pointer;
-    font-size: 0.75rem;
-    font-weight: 500;
-    transition: all 0.2s ease;
-    letter-spacing: 0.5px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-  }
-
-  .track-btn:hover {
-    background-color: #222;
-    border-color: rgba(255, 255, 255, 0.15);
-  }
-
-  .track-btn:active {
-    transform: scale(0.95);
-  }
-
-  .track-fader {
-    display: grid;
-    place-items: center;
-    padding: 0.5rem;
-  }
-
-  .vertical-slider {
-    -webkit-appearance: none;
-    width: 4px;
-    height: 100px;
-    background: #1a1a1a;
-    border-radius: 4px;
-    outline: none;
-    writing-mode: bt-lr;
-    -webkit-appearance: slider-vertical;
-    border: none;
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
-  }
-
-  .vertical-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
-    background: #e1e1e1;
-    border: 2px solid #1a1a1a;
-    border-radius: 50%;
-    cursor: pointer;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-  }
-
-  .vertical-slider::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
-    background: #e1e1e1;
-    border: 2px solid #1a1a1a;
-    border-radius: 50%;
-    cursor: pointer;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-  }
-
-  .vertical-slider::-webkit-slider-runnable-track {
-    width: 4px;
-    cursor: pointer;
-    background: #1a1a1a;
-    border-radius: 2px;
-  }
-
-  .vertical-slider::-moz-range-track {
-    width: 4px;
-    cursor: pointer;
-    background: #1a1a1a;
-    border-radius: 2px;
-  }
-
-  /* Active state */
-  .vertical-slider:active::-webkit-slider-thumb {
-    background: #e0e0e0;
-    transform: scale(1.1);
-  }
-
-  .vertical-slider:active::-moz-range-thumb {
-    background: #e0e0e0;
-    transform: scale(1.1);
-  }
-
-  /* For Firefox */
   @-moz-document url-prefix() {
     .vertical-slider {
       width: 100px;
@@ -448,10 +414,12 @@
   }
 
   .track-timeline {
-    background-color: #0c0c0c;
+    background-color: #1e1d1f;
     position: relative;
     padding: 0.5rem;
     border-left: 1px solid rgba(255, 255, 255, 0.05);
+    min-height: 100px;
+    position: relative;
   }
 
   .add-btn, 
@@ -600,7 +568,6 @@
     padding: 0 1rem;
   }
 
-  /* Update add buttons to be more compact */
   .add-btn, 
   .add-track-btn {
     background-color: #1a1a1a;
@@ -624,7 +591,6 @@
     height: 16px;
   }
 
-  /* Remove the old section header styles that we don't need anymore */
   .section-header {
     display: none;
   }
@@ -633,7 +599,6 @@
     display: none;
   }
 
-  /* Update the main content to remove the old header space */
   .sidebar-section {
     grid-template-rows: 1fr;
   }
