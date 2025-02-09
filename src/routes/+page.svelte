@@ -5,12 +5,14 @@
   import AddTrackDialog from '$lib/AddTrackDialog.svelte';
   import RecordingDialog from '$lib/RecordingDialog.svelte';
   import GenerateBeatDialog from '$lib/GenerateBeatDialog.svelte';
+  import GenerateSampleDialog from '$lib/GenerateSampleDialog.svelte';
   import lamejs from 'lamejs';
 
   let isPlaying = $state(false);
   let showAddTrackDialog = $state(false);
   let showRecordingDialog = $state(false);
   let showGenerateBeatDialog = $state(false);
+  let showGenerateSampleDialog = $state(false);
   let lastGeneratedAudioUrl = $state<string | null>(null);
   let playlist: any;
 
@@ -83,8 +85,7 @@
   }
 
   function handleGenerateSample() {
-    // This will be implemented later with AI functionality
-    console.log("Generate sample clicked - to be implemented");
+    showGenerateSampleDialog = true;
   }
 
   async function handleRecordingComplete(event: CustomEvent) {
@@ -113,6 +114,21 @@
         },
       ]);
       showGenerateBeatDialog = false;
+    }
+  }
+
+  async function handleSampleGenerated(event: CustomEvent) {
+    const audioBlob = event.detail.audioBlob;
+    if (audioBlob) {
+      const audioUrl = URL.createObjectURL(audioBlob);
+      lastGeneratedAudioUrl = audioUrl;
+      playlist.load([
+        {
+          src: audioUrl,
+          name: "Generated Sample",
+        },
+      ]);
+      showGenerateSampleDialog = false;
     }
   }
 
@@ -302,33 +318,38 @@
     on:beatGenerated={handleBeatGenerated}
     on:close={() => showGenerateBeatDialog = false}
   />
+  <GenerateSampleDialog
+    show={showGenerateSampleDialog}
+    on:close={() => showGenerateSampleDialog = false}
+    on:sampleGenerated={handleSampleGenerated}
+  />
   <div class="top-bar">
     <div class="logo">
       <img src="/Logo.svg" alt="Logo" />
     </div>
     
     <div class="transport-controls">
-      <button class="transport-btn" on:click={togglePlayback}>
+      <button class="transport-btn" onclick={togglePlayback}>
         <img src={isPlaying ? "/pauseIcon.svg" : "/playIcon.png"} alt={isPlaying ? "Pause" : "Play"} />
       </button>
-      <button class="transport-btn" on:click={() => showRecordingDialog = true}>
+      <button class="transport-btn" onclick={() => showRecordingDialog = true}>
         <img src="/recordIcon.png" alt="Record" />
       </button>
     </div>
 
     <div class="project-controls">
-      <button class="project-btn" on:click={handleExport}>Export</button>
+      <button class="project-btn" onclick={handleExport}>Export</button>
     </div>
   </div>
 
   <div class="controls">
     <div class="left-controls">
       <div class="control-buttons">
-        <button class="add-btn" on:click={() => showGenerateBeatDialog = true}>
+        <button class="add-btn" onclick={() => showGenerateBeatDialog = true}>
           <img src="/aiLogo.svg" alt="Add" />
           <span>Generate Beat</span>
         </button>
-        <button class="add-track-btn" on:click={() => showAddTrackDialog = true}>
+        <button class="add-track-btn" onclick={() => showAddTrackDialog = true}>
           <img src="/PlusIcon.svg" alt="Add Track" />
           <span>Add Track</span>
         </button>
@@ -340,7 +361,7 @@
     <div class="sidebar">
       <div class="sidebar-section">
         {#if lastGeneratedAudioUrl}
-          <button class="add-generated-btn" on:click={addTrackFromLastGenerated}>
+            <button class="add-generated-btn" onclick={addTrackFromLastGenerated}>
             <img src="/PlusIcon.svg" alt="Add Track" />
             <span>Add Copy of Generated Beat</span>
           </button>
