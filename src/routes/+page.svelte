@@ -71,6 +71,9 @@
 </script>
 
 <main class="app">
+
+  <a href= "/beatgeneration">CLICK LINK</a>
+  <a href= "/beater">CLICK ME!</a>
   <div class="top-bar">
     <div class="logo">
       <img src="/Logo.svg" alt="Logo" />
@@ -607,3 +610,4 @@
     grid-template-rows: 1fr;
   }
 </style>
+
