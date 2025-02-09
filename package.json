@@ -29,6 +29,7 @@
 		"app": "file:",
 		"swapy": "^1.0.5",
 		"tone": "^15.0.4",
-		"waveform-playlist": "^4.3.3"
+		"waveform-playlist": "^4.3.3",
+		"wavesurfer.js": "^7.9.0"
 	}
 }
