@@ -1,76 +1,389 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { Track } from '$lib/Track';
-  import { AudioClip } from '$lib/AudioClip';
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { Track } from '$lib/Track.svelte';
+  import AudioClip from '$lib/AudioClip.svelte';
   import { draggable } from '@neodrag/svelte';
   import type { DragOptions } from '@neodrag/svelte';
   import * as Tone from 'tone';
+  import WaveformPlaylist from "waveform-playlist";
+  import AddTrackDialog from '$lib/AddTrackDialog.svelte';
+
 
   let tracks: Track[] = $state([]);
   let isPlaying = $state(false);
   let currentTime = $state(0);
   let playhead = $state(0);
+  let playbackStarted = $state(false);
+  let showAddTrackDialog = $state(false);
   
-  const pixelsPerSecond = 100;
+  const pixelsPerSecond = 17;
   
   let transport: ReturnType<typeof Tone.getTransport>;
+  let masterGain: Tone.Gain;
 
   let audioItemPosition = $state({ x: 0, y: 0 });
   
-  function isOverTracksContainer(element: HTMLElement) {
-    // Get all track timeline elements
-    const trackTimelines = document.querySelectorAll('.track-timeline');
-    if (!trackTimelines.length) return false;
-    
-    // Get the current bounding rectangle of the dragged element
-    const elementRect = element.getBoundingClientRect();
-    console.log('Dragged element rect:', elementRect);
-    
-    // Check each timeline for intersection
-    for (const timeline of trackTimelines) {
-      const timelineRect = timeline.getBoundingClientRect();
-      console.log('Timeline rect:', timelineRect);
-      if (
-        elementRect.right >= timelineRect.left &&
-        elementRect.left <= timelineRect.right &&
-        elementRect.bottom >= timelineRect.top &&
-        elementRect.top <= timelineRect.bottom
-      ) {
-        return true;
+  let audioElements: Record<string, HTMLElement> = {};
+  let options: DragOptions = {
+    // allow dragging in both x and y directions for moving clips between tracks
+    bounds: 'parent',
+    axis: undefined, // Allow both x and y movement
+    grid: [1, 100], // Snap to track heights
+    onDrag: (data) => {
+      const clipElement = data.rootNode as HTMLElement;
+      if (clipElement) {
+        clipElement.style.zIndex = '1000'; // Ensure dragged clip stays on top
       }
+    },
+    onDragEnd: (data) => {
+        const clipId = data.rootNode.id;
+        const draggedElement = data.rootNode as HTMLElement;
+        if (draggedElement) {
+          draggedElement.style.zIndex = '100'; // Reset z-index after drag
+        }
+
+        console.log('Drag end event data:', data);
+
+        // Determine drop coordinates using event data if available
+        let dropX, dropY;
+        if (data.event) {
+            dropX = data.event.clientX;
+            dropY = data.event.clientY;
+        } else {
+            const fallbackEl = document.getElementById(clipId);
+            if (!fallbackEl) return;
+            const rect = fallbackEl.getBoundingClientRect();
+            dropX = rect.x + rect.width / 2;
+            dropY = rect.y + rect.height / 2;
+        }
+
+        // Use document.elementFromPoint to get the drop target
+        const dropTarget = document.elementFromPoint(dropX, dropY);
+        const trackTimeline = dropTarget?.closest('.track-timeline');
+        if (!trackTimeline) {
+            console.error('No track timeline found at drop location');
+            return;
+        }
+
+        const timelineRect = trackTimeline.getBoundingClientRect();
+        const clipElement = document.getElementById(clipId);
+        if (!clipElement) return;
+        const clipRect = clipElement.getBoundingClientRect();
+        const relativeX = clipRect.x - timelineRect.x;
+        const newStartTime = relativeX / pixelsPerSecond;
+
+        const newTrackId = trackTimeline.getAttribute('data-track-id');
+
+        console.log('New start time (seconds):', newStartTime, 'for clip:', clipId, 'in track:', newTrackId);
+
+        // Find the clip in our tracks data by matching clip id
+        let sourceTrack = null;
+        let clipIndex = -1;
+        for (const track of tracks) {
+            const index = track.clips.findIndex((c) => c.id.toString() === clipId);
+            if (index !== -1) {
+                sourceTrack = track;
+                clipIndex = index;
+                break;
+            }
+        }
+
+        if (!sourceTrack) {
+            console.error('Clip not found in any track');
+            return;
+        }
+
+        // Remove the clip from its current track
+        const [movedClip] = sourceTrack.clips.splice(clipIndex, 1);
+
+        // If the clip was dropped on a different track, add it to that track's clips
+        if (newTrackId && newTrackId !== sourceTrack.id.toString()) {
+            const targetTrack = tracks.find((t) => t.id.toString() === newTrackId);
+            if (targetTrack) {
+                targetTrack.clips.push(movedClip);
+                console.log('Moved clip to new track:', newTrackId);
+            } else {
+                // If target track not found, revert to original track
+                sourceTrack.clips.push(movedClip);
+            }
+        } else {
+            // Dropped in same track, push it back
+            sourceTrack.clips.push(movedClip);
+        }
+        
+        // Update the tracks array to trigger reactivity
+        tracks = tracks.slice();
+
+        // Update clip data for visual repositioning
+        movedClip.startTime = newStartTime;
+
+        // Update clip playback start time
+        if (movedClip.player) {
+            movedClip.player.stop();
+            movedClip.player.unsync();
+
+            // If scheduling before current time, update transport
+            if (newStartTime < currentTime) {
+                transport.pause();
+                transport.seconds = newStartTime;
+                if (isPlaying) {
+                    transport.start();
+                }
+            }
+            movedClip.player.sync().start(newStartTime);
+        }
     }
-    return false;
-  }
+  };
+
+
+  let playlist: any;
+
+  let activeTrackId: number | null = null;
+
+  let trackDragOptions: DragOptions = {
+    bounds: 'parent',
+    axis: 'y',
+    onDrag: (data) => {
+      const trackElem = data.rootNode as HTMLElement;
+      if (trackElem) {
+        trackElem.style.zIndex = '1000';
+      }
+    },
+    onDragEnd: (data) => {
+      const trackElem = data.rootNode as HTMLElement;
+      if (trackElem) trackElem.style.zIndex = '100';
+      const tracksContainer = document.querySelector('.tracks-content');
+      if (!tracksContainer) return;
+      const children = Array.from(tracksContainer.children) as HTMLElement[];
+      const newOrderIds = children.map(child => {
+        const idAttr = child.getAttribute('id');
+        if(idAttr && idAttr.startsWith('track-')) {
+           return parseInt(idAttr.replace('track-', ''));
+        }
+        return null;
+      }).filter(x => x !== null) as number[];
+      tracks = newOrderIds.map(id => tracks.find(t => t.id === id)).filter(t => t !== undefined) as typeof tracks;
+    }
+  };
 
   onMount(() => {
     transport = Tone.getTransport();
+    masterGain = new Tone.Gain(Tone.dbToGain(0)).toDestination();
     transport.bpm.value = 120;
     
     transport.scheduleRepeat((time) => {
       currentTime = transport.seconds;
       playhead = currentTime * pixelsPerSecond;
     }, 0.1);
+
+    // Initialize waveform playlist
+    playlist = WaveformPlaylist({
+      samplesPerPixel: 3000,
+      audioContext: Tone.context,
+      mono: false,
+      waveHeight: 100,
+      container: document.getElementById("playlist"),
+      state: "cursor",
+      colors: {
+        waveOutlineColor: "#E0EFF1",
+        timeColor: "grey",
+        fadeColor: "black",
+        progressColor: "transparent"
+      },
+      controls: {
+        show: false,
+        width: 0,
+      },
+      zoomLevels: [500, 1000, 3000, 5000],
+      timescale: false,
+      seekStyle: 'line',
+      isAutomaticScroll: true,
+      linkedEditing: true,
+      options: {
+        isAutomaticScroll: true,
+      }
+    });
+
+    // Set up initial track
+    addTrack();
+
+    // Set up playback position tracking
+    playlist.ee.on('timeupdate', (position: number) => {
+      currentTime = position;
+      updateTimelineMarker(position);
+    });
+
+    playlist.ee.on('play', () => {
+      isPlaying = true;
+      playbackStarted = true;
+    });
+
+    playlist.ee.on('pause', () => {
+      isPlaying = false;
+    });
+
+    playlist.ee.on('finished', () => {
+      isPlaying = false;
+      playbackStarted = false;
+      currentTime = 0;
+      updateTimelineMarker(0);
+    });
+
+    // Handle seeking when clicking on timeline
+    const timelineEl = document.querySelector('.timeline');
+    if (timelineEl) {
+      timelineEl.addEventListener('click', ((e: Event) => {
+        const mouseEvent = e as MouseEvent;
+        const rect = timelineEl.getBoundingClientRect();
+        const x = mouseEvent.clientX - rect.left;
+        const time = x / pixelsPerSecond;
+        playlist.ee.emit('select', time, time);
+        currentTime = time;
+        updateTimelineMarker(time);
+      }) as EventListener);
+    }
   })
 
   async function togglePlayback() {
     await Tone.start();
     
     if (!isPlaying) {
-      transport.start();
+      if (!playbackStarted) {
+        // If starting from beginning or after finish
+        playlist.play(0);
+      } else {
+        // Resume from current position
+        playlist.play(currentTime);
+      }
       isPlaying = true;
+      transport.start();
     } else {
-      transport.pause();
+      playlist.pause();
       isPlaying = false;
+      transport.pause();
     }
   }
 
-  function addTrack() {
+  function addTrack(file?: File) {
     const track = new Track(tracks.length, `Track ${tracks.length + 1}`);
     tracks.push(track);
+    
+    if (file) {
+      // If file provided, load it into the track
+      playlist.load([ 
+        {
+          src: file,
+          name: file.name,
+          gain: 0.5,
+        },
+      ]).then(() => {
+        // Track loaded successfully
+        if(masterGain) {
+          track.clips.forEach(clip => {
+            if(clip.player) {
+              clip.player.disconnect();
+              clip.player.connect(masterGain);
+            }
+          });
+        }
+      });
+    }
+    
+    // Trigger reactivity
+    tracks = tracks.slice();
+  }
+
+  function addAudioToTrack() {
+    const clipData = { id: 0, name: 'Audio 1', src: '/rec.m4a', player: null, element: null };
+    tracks[0].addAudioClip(clipData);
+    playlist.load([
+      {
+        src: "/rec.m4a",
+        name: "Audio 1",
+        gain: 0.5,
+      },
+    ]).then(() => {
+      // Audio added successfully
+      if(masterGain) {
+        tracks[0].clips.forEach(clip => {
+          if(clip.player) {
+            clip.player.disconnect();
+            clip.player.connect(masterGain);
+          }
+        });
+      }
+    });
+  }
+
+  function updateTimelineMarker(currentTime: number) {
+    const marker = document.querySelector('.timeline-marker') as HTMLElement;
+    if (marker) {
+      marker.style.left = `${currentTime * pixelsPerSecond}px`;
+    }
+  }
+
+  function setMainVolume(event: Event) {
+    const volume = (event.target as HTMLInputElement).valueAsNumber;
+    console.log('Volume slider changed to:', volume);
+    const dB = (volume / 100) * 60 - 60;
+    console.log('Setting masterGain to:', Tone.dbToGain(dB));
+    if(masterGain) {
+      masterGain.gain.rampTo(Tone.dbToGain(dB), 0.1);
+    }
+    
+    // Also update each clip's player's volume if available
+    tracks.forEach(track => {
+      track.clips.forEach(clip => {
+        if (clip.player && clip.player.volume) {
+          console.log(`Setting clip volume for clip with id ${clip.id || 'unknown'} to:`, dB, 'dB');
+          clip.player.volume.rampTo(dB, 0.1);
+        }
+      });
+    });
+
+    // Also update WaveformPlaylist's tracks gain if available
+    if (playlist && playlist.tracks) {
+      console.log('Updating playlist track gains');
+      playlist.tracks.forEach((t: any) => {
+        if (t.gain && t.gain.gain) {
+          const linearGain = Tone.dbToGain(dB);
+          console.log('Setting playlist track gain to:', linearGain);
+          t.gain.gain.rampTo(linearGain, 0.1);
+        }
+      });
+    } else {
+      console.log('No playlist.tracks available to update volume');
+    }
+  }
+
+  async function handleFileSelected(event: CustomEvent) {
+    const file = event.detail.file;
+    if (file) {
+      // Pass the selected file directly to addTrack to create a new track with the file loaded
+      addTrack(file);
+      
+      // Optionally mark the newly added track as active and close the dialog
+      activeTrackId = tracks[tracks.length - 1].id;
+      showAddTrackDialog = false;
+      
+      // Allow Svelte to update the reactive values
+      await tick();
+    }
+  }
+
+  function handleGenerateSample() {
+    // This will be implemented later with AI functionality
+    console.log("Generate sample clicked - to be implemented");
   }
 </script>
 
 <main class="app">
+  <AddTrackDialog 
+    show={showAddTrackDialog} 
+    on:fileSelected={handleFileSelected}
+    on:generateSample={handleGenerateSample}
+    on:close={() => showAddTrackDialog = false}
+  />
   <div class="top-bar">
     <div class="logo">
       <img src="/Logo.svg" alt="Logo" />
@@ -91,7 +404,7 @@
     <div class="master-controls">
       <div class="volume-control">
         <img src="/VolumeIcon.svg" alt="Volume" />
-        <input type="range" min="0" max="100" value="100" />
+        <input type="range" min="0" max="100" value="100" oninput={setMainVolume} />
       </div>
     </div>
 
@@ -101,76 +414,53 @@
     </div>
   </div>
 
-  <div class="controls-and-ruler">
+  <div class="controls">
     <div class="left-controls">
       <div class="control-buttons">
         <button class="add-btn">
           <img src="/aiLogo.svg" alt="Add" />
           <span>Generate Beat</span>
         </button>
-        <button class="add-track-btn" onclick={addTrack}>
+        <button class="add-track-btn" onclick={() => showAddTrackDialog = true}>
           <img src="/PlusIcon.svg" alt="Add Track" />
           <span>Add Track</span>
         </button>
       </div>
     </div>
     
-    <div class="timeline-ruler">
-      <div class="ruler-markings">
-        {#each Array(100) as _, i}
-          <div class="ruler-mark" style="left: {i * pixelsPerSecond}px">
-            <span class="ruler-time">{i}s</span>
-          </div>
-        {/each}
-      </div>
-      <div class="playhead" style="left: {playhead}px"></div>
-    </div>
+    
   </div>
 
   <div class="main-content">
     <div class="sidebar">
       <div class="sidebar-section">
         <div class="audio-list">
-          <div class="audio-item" use:draggable={{
-            bounds: ".main-content",
-            gpuAcceleration: true,
-            position: audioItemPosition,
-            onDragEnd: ({ offsetX, offsetY, rootNode }) => {
-                const isOver = isOverTracksContainer(rootNode);
-                //console.log('Drop position:', { offsetX, offsetY });
-                // console.log('Element rect:', rootNode.getBoundingClientRect());
-                //console.log('Is over tracks:', isOver);
-                
-                if (!isOver) {
-                    audioItemPosition = { x: 0, y: 0 };
-                } else {
-                    audioItemPosition = { x: offsetX, y: offsetY };
-                }
-            },
-            onDrag: ({ offsetX, offsetY }) => {
-                audioItemPosition = { x: offsetX, y: offsetY };
-            }
-          }}>
-            <span class="audio-name">Audio 1</span>
-            <span class="audio-duration">2:30</span>
-          </div>
+          
         </div>
       </div>
     </div>
 
     <div class="tracks-container">
-      <div class="tracks-content">
-        {#each tracks as track}
-          <div class="track">
-            <div class="track-controls">
-              <div class="track-header">
-                <h4>{track.name}</h4>
-              </div>
+      <div class="timeline">
+        <div class="timeline-ruler">
+          {#each Array(Math.ceil(80)) as _, i}
+            <div class="timeline-mark" style="left: {i * pixelsPerSecond}px">
+              <span class="timeline-label">{i}s</span>
             </div>
-            <div class="track-timeline">
-              <div class="track-content">
-                <!-- Timeline content -->
-              </div>
+          {/each}
+        </div>
+        <div class="timeline-marker"></div>
+      </div>
+      <div id="playlist"></div>
+      <div class="tracks-content">
+        {#each tracks as track (track.id)}
+          <div class="track" id={"track-" + track.id} use:draggable={trackDragOptions} on:click={() => activeTrackId = track.id} class:selected={activeTrackId === track.id}>
+            <div class="track-timeline" data-track-id={track.id}>
+              {#each track.clips as clip (clip.id)}
+                <div class="clip-wrapper" id={clip.id}>
+                  <AudioClip {clip} draggableOptions={options} />
+                </div>
+              {/each}
             </div>
           </div>
         {/each}
@@ -270,46 +560,42 @@
     opacity: 0.9;
   }
 
+  .timeline {
+    position: relative;
+    height: 30px;
+    background-color: #111111;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
   .timeline-ruler {
     position: relative;
     height: 100%;
-    background-color: #111111;
-    overflow: hidden;
+    padding-top: 15px;
   }
 
-  .ruler-markings {
+  .timeline-mark {
     position: absolute;
-    top: 0;
-    left: 0;
-    height: 100%;
-    width: 100%;
-  }
-
-  .ruler-mark {
-    position: absolute;
-    top: 50%;
     width: 1px;
-    height: 10px;
-    background-color: rgba(255, 255, 255, 0.2);
-    transform: translateY(-50%);
+    height: 8px;
+    background-color: rgba(255, 255, 255, 0.3);
   }
 
-  .ruler-time {
+  .timeline-label {
     position: absolute;
-    top: -20px;
+    top: -15px;
     left: 2px;
     font-size: 10px;
-    color: rgba(255, 255, 255, 0.5);
+    color: rgba(255, 255, 255, 0.6);
   }
 
-  .playhead {
+  .timeline-marker {
     position: absolute;
     top: 0;
     width: 2px;
     height: 100%;
     background-color: #ff0000;
-    z-index: 1000;
     pointer-events: none;
+    z-index: 1000;
   }
 
   .main-content {
@@ -330,16 +616,6 @@
     display: grid;
     grid-template-rows: auto 1fr;
     overflow: visible;
-  }
-
-  .section-header {
-    padding: 1.25rem;
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.5rem;
-    align-items: center;
-    border-bottom: 1px solid #202020;
-    background-color: #141414;
   }
 
   .audio-list {
@@ -370,56 +646,58 @@
   }
 
   .tracks-container {
-    display: grid;
-    grid-template-rows: auto 1fr;
     overflow: hidden;
   }
 
+  
+
+
   .tracks-content {
-    overflow-y: auto;
     background-color: #0a0a0a;
+    overflow-y: auto;
+    height: 100%;
+    width: 100%;
   }
 
   .track {
-    display: grid;
-    grid-template-columns: 240px 1fr;
-    height: 100px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  }
-
-  .track-controls {
-    background-color: #2d2a2a;
-    border-right: 1px solid #202020;
-    padding: 1.25rem;
-    display: grid;
-    grid-template-rows: auto 1fr;
-    gap: 1rem;
-  }
-
-  .track-header {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 0.5rem;
-    align-items: center;
-  }
-
-  @-moz-document url-prefix() {
-    .vertical-slider {
-      width: 100px;
-      height: 4px;
-      transform: rotate(270deg);
-      transform-origin: left;
-      margin: 48px 0;
-    }
   }
 
   .track-timeline {
     background-color: #1e1d1f;
     position: relative;
-    padding: 0.5rem;
     border-left: 1px solid rgba(255, 255, 255, 0.05);
     min-height: 100px;
+    height: 100px;
     position: relative;
+    display: block;
+    overflow: visible;
+  }
+
+  .track-name {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+    background-color: rgba(0, 0, 0, 0.3);
+    padding: 2px 6px;
+    border-radius: 3px;
+    z-index: 1;
+  }
+
+  .track-content {
+    height: 100%;
+    width: 100%;
+    display: flex;
+    align-items: center;
+  }
+
+  .audio-clip {
+    background-color: #4a9eff;
+    padding: 0.25rem;
+    height: 80%;
+    position: absolute;
   }
 
   .add-btn, 
@@ -529,14 +807,15 @@
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
   }
 
-  .controls-and-ruler {
+  .controls {
     background-color: #111111;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     height: 48px;
-    display: grid;
-    grid-template-columns: auto 1fr;
+    display: flex;
+    flex-direction: row;
     align-items: center;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+
   }
 
   .left-controls {
@@ -562,10 +841,10 @@
   }
 
   .timeline-ruler {
-    height: 100%;
     background-color: #111111;
     position: relative;
     padding: 0 1rem;
+    height: 30px;
   }
 
   .add-btn, 
@@ -591,19 +870,73 @@
     height: 16px;
   }
 
-  .section-header {
-    display: none;
-  }
-
-  .tracks-header {
-    display: none;
-  }
-
   .sidebar-section {
     grid-template-rows: 1fr;
   }
 
   .tracks-container {
     grid-template-rows: 1fr;
+  }
+
+  .audio-clip {
+    background-color: #4a9eff;
+    padding: 0.25rem;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+  }
+
+  #playlist {
+    width: 100%;
+    height: 100%;
+  }
+
+  :global(#playlist .playlist-time-scale) {
+    background-color: #1a1a1a !important;
+    color: white !important;
+  }
+
+  :global(#playlist .channel) {
+    background-color: #1e1e1e !important;
+  }
+
+  :global(#playlist .playlist-tracks) {
+    background-color: #141414 !important;
+  }
+
+  :global(#playlist .channel-progress) {
+    background: rgba(74, 158, 255, 0.2) !important;
+  }
+
+  :global(#playlist .cursor) {
+    background: rgba(255, 255, 255, 0.2) !important;
+  }
+
+  :global(#playlist .channel wave) {
+    background-color: #1e1e1e !important;
+    border: none !important;
+  }
+
+  :global(#playlist .channel.cursor-active) {
+    background-color: #252525 !important;
+  }
+
+  :global(#playlist .channel:hover) {
+    background-color: #252525 !important;
+  }
+
+  #playlist {
+    height: calc(100% - 30px);
+  }
+
+  .clip-wrapper {
+    position: absolute;
+    height: 80px;
+    top: 10px;
+    pointer-events: all;
+  }
+
+  .track.selected {
+    outline: 2px solid #4a9eff;
   }
 </style>

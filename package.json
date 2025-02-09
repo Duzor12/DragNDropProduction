@@ -28,6 +28,7 @@
 		"@neodrag/svelte": "^2.3.0",
 		"app": "file:",
 		"swapy": "^1.0.5",
-		"tone": "^15.0.4"
+		"tone": "^15.0.4",
+		"waveform-playlist": "^4.3.3"
 	}
 }
