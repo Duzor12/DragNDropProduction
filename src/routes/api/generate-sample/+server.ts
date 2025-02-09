@@ -30,19 +30,22 @@ async function handleApiResponse(response: Response, endpoint: string, payload?:
 export const POST: RequestHandler = async ({ request }) => {
     try {
         const data = await request.json();
-        const { genre, tempo, requirements } = data;
+        const { genre, tempo, requirements, vocalStyle, lyrics } = data;
 
-        console.log('Received request with data:', { genre, tempo, requirements });
+        console.log('Received request with data:', { genre, tempo, requirements, vocalStyle, lyrics });
 
-        if (!genre || !tempo) {
-            console.error("Missing required fields:", { received: data, required: ['genre', 'tempo'] });
-            return new Response(JSON.stringify({ error: 'Missing required fields: genre and tempo' }), { status: 400 });
+        if (!genre || !tempo || !vocalStyle) {
+            console.error("Missing required fields:", { received: data, required: ['genre', 'tempo', 'vocalStyle'] });
+            return new Response(JSON.stringify({ error: 'Missing required fields: genre, tempo, and vocalStyle' }), { status: 400 });
         }
 
-        // Build the prompt for track creation
-        let promptText = `${genre} music at ${tempo} BPM`;
+        // Build the prompt for sample creation
+        let promptText = `${genre} ${vocalStyle} at ${tempo} BPM`;
+        if (lyrics) {
+            promptText += ` with lyrics about ${lyrics}`;
+        }
         if (requirements) {
-            promptText += ` with ${requirements}`;
+            promptText += `. Additional requirements: ${requirements}`;
         }
 
         // STEP 1: Initialize audio generation
@@ -120,11 +123,11 @@ export const POST: RequestHandler = async ({ request }) => {
             status: 200,
             headers: {
                 'Content-Type': 'audio/wav',
-                'Content-Disposition': 'attachment; filename="generated-beat.wav"'
+                'Content-Disposition': 'attachment; filename="generated-sample.wav"'
             }
         });
     } catch (error) {
-        console.error('Error in beat generation process:', {
+        console.error('Error in sample generation process:', {
             error: error instanceof Error ? {
                 message: error.message,
                 stack: error.stack

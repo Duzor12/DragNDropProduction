@@ -11,6 +11,7 @@
   let showAddTrackDialog = $state(false);
   let showRecordingDialog = $state(false);
   let showGenerateBeatDialog = $state(false);
+  let lastGeneratedAudioUrl = $state<string | null>(null);
   let playlist: any;
 
   onMount(() => {
@@ -103,13 +104,26 @@
   async function handleBeatGenerated(event: CustomEvent) {
     const audioBlob = event.detail.audioBlob;
     if (audioBlob) {
+      const audioUrl = URL.createObjectURL(audioBlob);
+      lastGeneratedAudioUrl = audioUrl;
       playlist.load([
         {
-          src: URL.createObjectURL(audioBlob),
+          src: audioUrl,
           name: "Generated Beat",
         },
       ]);
       showGenerateBeatDialog = false;
+    }
+  }
+
+  function addTrackFromLastGenerated() {
+    if (lastGeneratedAudioUrl) {
+      playlist.load([
+        {
+          src: lastGeneratedAudioUrl,
+          name: "Generated Beat Copy",
+        },
+      ]);
     }
   }
 
@@ -325,13 +339,12 @@
   <div class="main-content">
     <div class="sidebar">
       <div class="sidebar-section">
-        <div class="audio-list">
-          {#each playlist?.tracks || [] as track}
-            <div class="audio-item">
-              <span>{track.name || 'Untitled Track'}</span>
-            </div>
-          {/each}
-        </div>
+        {#if lastGeneratedAudioUrl}
+          <button class="add-generated-btn" on:click={addTrackFromLastGenerated}>
+            <img src="/PlusIcon.svg" alt="Add Track" />
+            <span>Add Copy of Generated Beat</span>
+          </button>
+        {/if}
       </div>
     </div>
     <div class="tracks-container">
@@ -538,8 +551,9 @@
     background-color: #111111;
     border-right: 1px solid rgba(255, 255, 255, 0.05);
     display: grid;
-    grid-template-rows: 1fr;
+    grid-template-rows: auto;
     overflow: hidden;
+    padding: 1rem;
   }
 
   .sidebar-section {
@@ -622,5 +636,38 @@
 
   :global(#playlist .channel:hover) {
     background-color: #252525 !important;
+  }
+
+  .add-generated-btn {
+    background-color: #1a1a1a;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.75rem 1.25rem;
+    color: #ffffff;
+    cursor: pointer;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.75rem;
+    align-items: center;
+    font-size: 0.875rem;
+    width: 100%;
+    transition: all 0.2s ease;
+    margin-bottom: 1rem;
+  }
+
+  .add-generated-btn:hover {
+    background-color: #222;
+    border-color: rgba(255, 255, 255, 0.15);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    transform: translateY(-1px);
+  }
+
+  .add-generated-btn:active {
+    transform: scale(0.98);
+  }
+
+  .add-generated-btn img {
+    width: 18px;
+    height: 18px;
   }
 </style>
